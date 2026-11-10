@@ -1,0 +1,2 @@
+# Hashes bind exact frozen bytes. Do not convert this file to CRLF on checkout.
+research/frozen_artifacts/protocol_v3.yaml -text

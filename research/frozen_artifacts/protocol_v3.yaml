@@ -1,0 +1,336 @@
+protocol:
+  name: IndoMeme-XAI Final Revision Experimental Protocol V3
+  status: FROZEN
+  freeze_date: '2026-08-08'
+  change_policy: Any result-affecting change after training begins requires a new protocol version.
+dataset:
+  kaggle_root: /kaggle/input/datasets/reynaldaryansyah/dataset/indomeme_xai_revision
+  source: aiatums/INDOMEME
+  source_revision: 5449dfa661896339c5be52bb6cec1f16c7792dd8
+  source_counts:
+    train: 4018
+    test: 1005
+  quarantine:
+    total: 44
+    exact_test_overlap: 2
+    perceptual_test_overlap: 42
+    phash_max_hamming_distance: 4
+    policy: Official test unchanged; overlapping official-train samples excluded.
+  final_counts:
+    train: 3402
+    validation: 572
+    test: 1005
+  split:
+    method: StratifiedGroupKFold
+    n_splits: 7
+    shuffle: true
+    random_state: 42
+    stratification_target: hate_final
+    group: visual_group_id
+    selected_fold: 1
+    selection_rule:
+    - minimum absolute validation-ratio error from 0.15
+    - minimum absolute validation hate-rate error
+    - minimum fold index
+  manifest_sha256:
+    train: 24f11daf749e5450fc84f46b4f82fda636e7688d74aaaff794965de8d527f5eb
+    validation: 40f9a7b2b7e2ce5bdd60403001fcf08b09968c944858c424a33da2d1e8d376e0
+    test: d00b85cb9d50af6dabaaef5ca22860809140ea4ce6c8aeebc7353bd1657bb1db
+    quarantine: 4f721a0d1dccb0ba636e2803bed5ca93166b1b717d2d7076adf7ac7398205562
+  topic_categories:
+  - political
+  - national origin
+  - individual
+  - institutions
+  - gender
+  - religion
+  - social sub-groups
+  - unknown
+  topic_missing_policy: blank/NaN/None-Others -> unknown
+models:
+  indobertweet:
+    id: indolem/indobertweet-base-uncased
+    revision: c77ff8c6b42c1d8e357e17c0e1f83c798531beef
+    max_length: 128
+  vit:
+    id: google/vit-base-patch16-224-in21k
+    revision: b456956
+    image_size: 224
+  siglip2:
+    id: google/siglip2-base-patch16-224
+    revision: 75de2d55ec2d0b4efc50b3e9ad70dba96a7b2fa2
+    feature_dim: 768
+    image_size: 224
+    max_text_length: 64
+    adaptation: full_finetuning
+preprocessing:
+  ocr:
+    unicode: NFKC
+    lowercase: true
+    remove_urls: true
+    remove_mentions: true
+    hashtag_policy: remove marker and retain word
+    slang_normalization: true
+    collapse_whitespace: true
+  controlled_text:
+    A_B_C: '[topic] caption [SEP] ocr_cleaned'
+    D: caption [SEP] ocr_cleaned
+    max_length: 128
+  controlled_image_train:
+    resize: 224
+    color_jitter:
+      brightness: 0.2
+      contrast: 0.2
+    horizontal_flip: false
+    grayscale: false
+    perspective: false
+    affine: false
+    normalization: ViT native mean/std
+  controlled_image_eval:
+    resize: 224
+    normalization: ViT native mean/std
+  siglip2:
+    text_format: 'Topik: <topic>. Teks meme: <ocr>. Deskripsi visual: <caption>.'
+    text_order:
+    - topic_normalized
+    - ocr
+    - caption
+    max_length: 64
+    padding: max_length
+    truncation: true
+    image_processor: native SigLIP2 at 224x224
+architectures:
+  common_hidden_dim: 768
+  topic_projection: 8 -> 32
+  shared_classifier_with_topic: 800 -> 256 -> GELU -> Dropout(0.3) -> 2
+  shared_classifier_without_topic: 768 -> 256 -> GELU -> Dropout(0.3) -> 2
+  A:
+    name: Late Fusion
+    fusion: concat(text_CLS,image_CLS) -> Linear(1536,768) -> LayerNorm
+    topic: true
+  B:
+    name: Single Cross-Attention
+    attention: text_CLS query -> 196 image patch keys/values; ViT CLS excluded
+    heads: 8
+    dropout: 0.1
+    fusion: concat(text_CLS,attended_image) -> Linear(1536,768) -> LayerNorm
+    topic: true
+  C:
+    name: ICAM V3
+    cross_attention:
+      t2i: text_CLS query -> image patches
+      i2t: image_CLS query -> valid text tokens
+      combine: concat(z_T2I,z_I2T) -> Linear(1536,768) -> LayerNorm = z_CA
+      heads: 8
+      dropout: 0.1
+    incongruity:
+      common_projection_dim: 768
+      similarity: cosine
+      mismatch: u_j = 1 - max_i S_ij
+      weights: a_j = softmax(u_j)
+      representation: z_INC = sum_j a_j V'_j
+      text_scope: semantic valid tokens only
+      vision_scope: image patches only; CLS excluded
+    gate: g=sigmoid(W_g[z_CA;z_INC]+b); z_ICAM=LayerNorm(g*z_CA+(1-g)*z_INC)
+    topic: true
+  D:
+    name: Without Explicit Topic
+    fusion: same implementation as B
+    topic_text_prefix: false
+    topic_projection: false
+icam_ablations:
+  C_no_incongruity: z_CA only
+  C_no_gate: 0.5*z_CA + 0.5*z_INC
+  seeds:
+  - 42
+  - 123
+  - 2024
+  - 7
+  - 999
+external_E:
+  role: external pretrained VLM comparator; not controlled A-D
+  adaptation: full_finetuning
+  classifier: concat(text_embeds,image_embeds) -> 1536 -> 256 -> GELU -> Dropout(0.3) -> 2
+  batch_size: 32
+  gradient_accumulation_steps: 2
+  effective_batch_size: 64
+  backbone_lr: 1.0e-05
+  head_lr: 5.0e-05
+  xai_roar: false
+training:
+  seeds:
+  - 42
+  - 123
+  - 2024
+  - 7
+  - 999
+  batch_size: 32
+  gradient_accumulation_steps: 2
+  effective_batch_size: 64
+  max_epochs: 15
+  early_stopping_patience: 5
+  early_stopping_metric: validation Macro-F1 at threshold 0.5
+  loss:
+    name: class-weighted focal loss
+    gamma: 2.0
+    class_weights: balanced weights computed from frozen V3 train manifest
+    label_smoothing: 0.0
+  sampler: seeded shuffled full training set
+  weighted_random_sampler: false
+  supcon: false
+  rdrop: false
+  optimizer:
+    name: AdamW
+    weight_decay: 0.01
+    no_decay:
+    - bias
+    - LayerNorm
+    - layer_norm
+    lr_encoder: 1.0e-05
+    lr_fusion: 3.0e-05
+    lr_head: 5.0e-05
+  scheduler:
+    name: cosine
+    warmup_ratio: 0.1
+    step_unit: optimizer_step
+  gradient_clip_norm: 1.0
+  mixed_precision: fp16 on Kaggle T4
+  controlled_freeze:
+    text_embeddings: true
+    text_bottom_layers: 2
+    vision_embeddings: true
+    vision_bottom_layers: 2
+  accumulation_remainder: flush final group and divide by actual microbatch count
+checkpointing:
+  best_metric: validation Macro-F1 at threshold 0.5
+  save:
+  - best.pt
+  - last.pt
+  last_fields:
+  - model
+  - optimizer
+  - scheduler
+  - scaler
+  - epoch
+  - best_metric
+  - no_improve
+  - python_rng
+  - numpy_rng
+  - torch_rng
+  - torch_cuda_rng
+  - config_hash
+  atomic_write: true
+  resume_mid_epoch: restart interrupted epoch
+threshold:
+  source: validation only
+  start: 0.4
+  end: 0.65
+  step: 0.01
+  objective: Macro-F1
+  tie_break:
+  - closest to 0.5
+  - lower threshold
+  boundary: warn only; do not expand adaptively
+test_firewall:
+  training_test_loader: false
+  test_forbidden_for:
+  - checkpoint selection
+  - early stopping
+  - threshold calibration
+  - seed selection
+  - architecture selection
+  - hyperparameter selection
+  evaluation: once after run decisions are frozen
+  historical_disclosure: official test was used historically; only V3 is protected by this firewall
+metrics:
+  primary: Macro-F1
+  secondary:
+  - hateful precision
+  - hateful recall
+  - hateful F1
+  - weighted F1
+  - accuracy
+  - ROC-AUC
+  - PR-AUC/AP
+  report:
+  - raw per-seed values
+  - mean ± standard deviation across five seeds
+  - paired seed-wise differences for controlled comparisons
+  - trainable parameter counts
+ensemble:
+  status: secondary
+  members: five seeds of same architecture
+  aggregation: mean hateful probability
+  threshold: calibrated on averaged validation probabilities
+  fairness: ensemble-to-ensemble only
+xai:
+  architecture: C ICAM V3
+  representative_seed: median validation Macro-F1; tie validation ROC-AUC then fixed seed order
+  selection_before_test: true
+  integrated_gradients:
+    steps: 50
+    target: predicted-class logit
+  cross_attention: actual text_CLS -> 196 patches; per-head then mean
+  attention_rollout: ViT rollout with residual identity
+  incongruity: internal ICAM a_j
+perturbation:
+  levels_percent:
+  - 0
+  - 10
+  - 20
+  - 30
+  random_repetitions: 5
+  text_ranking: absolute IG semantic tokens
+  image_rankings:
+  - cross-attention
+  - attention rollout
+  - incongruity
+  threshold: representative checkpoint validation-calibrated threshold
+roar:
+  mask_percent: 20
+  seeds:
+  - 42
+  - 123
+  - 2024
+  architecture: C ICAM V3
+  text_methods:
+  - Integrated Gradients
+  - random
+  image_methods:
+  - cross-attention
+  - attention rollout
+  - incongruity
+  - random
+  matched_zero_percent_baseline: true
+  initialization: same pretrained backbone initialization
+  selection: masked train -> masked validation -> masked test once
+case_study:
+  architecture: representative C
+  groups:
+  - TP
+  - TN
+  - FP
+  - FN
+  selection: confidence closest to group median; tie lowest sample_uid
+  count: 4
+topic_analysis:
+  term: potential topic shortcut learning
+  controlled_comparison: B vs D
+  main_topic_analysis: first normalized topic; descriptive only
+  multi_label_membership: true
+execution_order:
+- protocol integrity check and environment capture
+- engineering dry run and gradient-flow assertions
+- C seed-42 TRAIN+VAL smoke run; official test locked
+- A/B/C/D five-seed controlled runs
+- C_no_incongruity and C_no_gate five-seed ablations
+- E SigLIP2 five-seed external comparator
+- freeze all run/model decisions
+- final official-test evaluation
+- secondary ensembles
+- representative C selection from validation
+- XAI
+- perturbation
+- ROAR
+- case studies and topic analysis
+- manuscript and reviewer response

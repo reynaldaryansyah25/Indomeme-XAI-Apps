@@ -1,0 +1,10 @@
+# Research runtime versions recorded by the training notebook.
+torch==2.10.0
+torchvision==0.25.0
+transformers==5.0.0
+huggingface-hub==1.11.0
+numpy==2.0.2
+pandas==2.3.3
+Pillow==12.3.0
+PyYAML==6.0.3
+streamlit==1.67.0

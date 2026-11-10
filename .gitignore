@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+.streamlit/secrets.toml
+models/checkpoints/*.pt
+models/encoders/
+research/frozen_artifacts/*
+!research/frozen_artifacts/README.md
+!research/frozen_artifacts/protocol_v3.yaml
+*.log
