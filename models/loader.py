@@ -16,6 +16,9 @@ class ModelBundle:
 
 def load_model():
     protocol = load_protocol()
+    from core.bootstrap import ensure_environment_ready
+    ensure_environment_ready()
+
     if not CHECKPOINT.is_file() or sha256(CHECKPOINT) != CHECKPOINT_SHA:
         raise ResearchUnavailable('Checkpoint missing or SHA-256 mismatch')
     import torch
