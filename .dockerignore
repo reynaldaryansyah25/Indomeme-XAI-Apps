@@ -1,0 +1,10 @@
+.venv/
+.git/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+models/checkpoints/*.pt
+models/encoders/
+docs/
+.env
+*.log

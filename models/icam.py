@@ -33,6 +33,95 @@ def assert_freeze_policy(model):
 
 class ICAM(nn.Module):
 
+    @classmethod
+    def _init_fusion_heads(cls, model, variant):
+        if variant == 'A':
+            model.late_fusion = nn.Linear(HIDDEN_DIM * 2, HIDDEN_DIM)
+            model.fusion_norm = nn.LayerNorm(HIDDEN_DIM)
+        if variant in {'B', 'D'}:
+            model.cross_t2i = nn.MultiheadAttention(embed_dim=HIDDEN_DIM, num_heads=NUM_HEADS, dropout=ATTN_DROPOUT, batch_first=True)
+            model.cross_fusion = nn.Linear(HIDDEN_DIM * 2, HIDDEN_DIM)
+            model.fusion_norm = nn.LayerNorm(HIDDEN_DIM)
+        if variant in {'C', 'C_NO_INCONGRUITY', 'C_NO_GATE'}:
+            model.cross_t2i = nn.MultiheadAttention(embed_dim=HIDDEN_DIM, num_heads=NUM_HEADS, dropout=ATTN_DROPOUT, batch_first=True)
+            model.cross_i2t = nn.MultiheadAttention(embed_dim=HIDDEN_DIM, num_heads=NUM_HEADS, dropout=ATTN_DROPOUT, batch_first=True)
+            model.ca_projection = nn.Linear(HIDDEN_DIM * 2, HIDDEN_DIM)
+            model.ca_norm = nn.LayerNorm(HIDDEN_DIM)
+            if variant in {'C', 'C_NO_GATE'}:
+                model.text_incongruity_projection = nn.Linear(HIDDEN_DIM, HIDDEN_DIM)
+                model.image_incongruity_projection = nn.Linear(HIDDEN_DIM, HIDDEN_DIM)
+                model.icam_norm = nn.LayerNorm(HIDDEN_DIM)
+            if variant == 'C':
+                model.gate = nn.Linear(HIDDEN_DIM * 2, HIDDEN_DIM)
+        if model.uses_topic:
+            model.topic_projection = nn.Linear(8, TOPIC_PROJ_DIM)
+            classifier_input = HIDDEN_DIM + TOPIC_PROJ_DIM
+        else:
+            classifier_input = HIDDEN_DIM
+        model.classifier = nn.Sequential(nn.Linear(classifier_input, 256), nn.GELU(), nn.Dropout(0.3), nn.Linear(256, 2))
+
+    @classmethod
+    def build_from_checkpoint_state(cls, text_spec, vision_spec, tokenizer, state, local_files_only=True):
+        """Construct ICAM sequentially while consuming trainable_state to avoid PeakRSS explosion."""
+        import gc
+        model = cls.__new__(cls)
+        nn.Module.__init__(model)
+        variant = "C"
+        model.tokenizer = tokenizer
+        model.variant = variant
+        model.uses_topic = True
+
+        model.text_encoder = AutoModel.from_pretrained(text_spec['id'], revision=text_spec['revision'], local_files_only=local_files_only)
+        if int(model.text_encoder.config.hidden_size) != HIDDEN_DIM:
+            raise RuntimeError('Unexpected IndoBERTweet hidden dimension.')
+        set_module_trainable(model.text_encoder.embeddings, False)
+        for layer in model.text_encoder.encoder.layer[:2]:
+            set_module_trainable(layer, False)
+        with torch.no_grad():
+            for name, param in model.text_encoder.named_parameters():
+                if not param.requires_grad:
+                    continue
+                full = f'text_encoder.{name}'
+                if full not in state:
+                    raise KeyError(full)
+                tensor = state.pop(full)
+                param.copy_(tensor)
+                del tensor
+        gc.collect()
+
+        model.vision_encoder = AutoModel.from_pretrained(vision_spec['id'], revision=vision_spec['revision'], local_files_only=local_files_only)
+        if int(model.vision_encoder.config.hidden_size) != HIDDEN_DIM:
+            raise RuntimeError('Unexpected ViT hidden dimension.')
+        set_module_trainable(model.vision_encoder.embeddings, False)
+        for layer in model.vision_encoder.encoder.layer[:2]:
+            set_module_trainable(layer, False)
+        with torch.no_grad():
+            for name, param in model.vision_encoder.named_parameters():
+                if not param.requires_grad:
+                    continue
+                full = f'vision_encoder.{name}'
+                if full not in state:
+                    raise KeyError(full)
+                tensor = state.pop(full)
+                param.copy_(tensor)
+                del tensor
+        gc.collect()
+
+        cls._init_fusion_heads(model, variant)
+        with torch.no_grad():
+            for name, param in model.named_parameters():
+                if name.startswith(('text_encoder.', 'vision_encoder.')) or not param.requires_grad:
+                    continue
+                if name not in state:
+                    raise KeyError(name)
+                tensor = state.pop(name)
+                param.copy_(tensor)
+                del tensor
+        if state:
+            raise KeyError(f'Unexpected extra checkpoint keys: {sorted(state)[:5]}')
+        gc.collect()
+        return model
+
     def __init__(self, text_spec, vision_spec, tokenizer, local_files_only=True):
         super().__init__()
         variant = "C"
@@ -48,30 +137,7 @@ class ICAM(nn.Module):
         if int(self.vision_encoder.config.hidden_size) != HIDDEN_DIM:
             raise RuntimeError('Unexpected ViT hidden dimension.')
         freeze_controlled_backbones(self.text_encoder, self.vision_encoder)
-        if variant == 'A':
-            self.late_fusion = nn.Linear(HIDDEN_DIM * 2, HIDDEN_DIM)
-            self.fusion_norm = nn.LayerNorm(HIDDEN_DIM)
-        if variant in {'B', 'D'}:
-            self.cross_t2i = nn.MultiheadAttention(embed_dim=HIDDEN_DIM, num_heads=NUM_HEADS, dropout=ATTN_DROPOUT, batch_first=True)
-            self.cross_fusion = nn.Linear(HIDDEN_DIM * 2, HIDDEN_DIM)
-            self.fusion_norm = nn.LayerNorm(HIDDEN_DIM)
-        if variant in {'C', 'C_NO_INCONGRUITY', 'C_NO_GATE'}:
-            self.cross_t2i = nn.MultiheadAttention(embed_dim=HIDDEN_DIM, num_heads=NUM_HEADS, dropout=ATTN_DROPOUT, batch_first=True)
-            self.cross_i2t = nn.MultiheadAttention(embed_dim=HIDDEN_DIM, num_heads=NUM_HEADS, dropout=ATTN_DROPOUT, batch_first=True)
-            self.ca_projection = nn.Linear(HIDDEN_DIM * 2, HIDDEN_DIM)
-            self.ca_norm = nn.LayerNorm(HIDDEN_DIM)
-            if variant in {'C', 'C_NO_GATE'}:
-                self.text_incongruity_projection = nn.Linear(HIDDEN_DIM, HIDDEN_DIM)
-                self.image_incongruity_projection = nn.Linear(HIDDEN_DIM, HIDDEN_DIM)
-                self.icam_norm = nn.LayerNorm(HIDDEN_DIM)
-            if variant == 'C':
-                self.gate = nn.Linear(HIDDEN_DIM * 2, HIDDEN_DIM)
-        if self.uses_topic:
-            self.topic_projection = nn.Linear(8, TOPIC_PROJ_DIM)
-            classifier_input = HIDDEN_DIM + TOPIC_PROJ_DIM
-        else:
-            classifier_input = HIDDEN_DIM
-        self.classifier = nn.Sequential(nn.Linear(classifier_input, 256), nn.GELU(), nn.Dropout(0.3), nn.Linear(256, 2))
+        self._init_fusion_heads(self, variant)
 
     def semantic_text_mask(self, input_ids, attention_mask):
         mask = attention_mask.bool().clone()

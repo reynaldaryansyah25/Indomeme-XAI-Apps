@@ -203,6 +203,19 @@ Indomeme-XAI-Apps/
 
 ---
 
+## ☁️ Deployment Cloud (Gratis)
+
+Repositori ini mendukung pemuatan artefak model otomatis (`core/bootstrap.py` akan mengunduh dan memverifikasi `best_model.pt` serta encoder secara otomatis saat inferensi pertama):
+
+- **Hugging Face Spaces (`CPU Basic` — 16 GB RAM, Free Tier / Gratis, Direkomendasikan):**
+  1. Buat Space baru di Hugging Face dengan SDK **`Docker`** (hardware **`CPU Basic · 16 GB RAM`**).
+  2. Hubungkan repositori ini (atau unggah isi repositori beserta [`Dockerfile`](Dockerfile)).
+  3. Kontainer otomatis berjalan pada port `7860` menggunakan [`Dockerfile`](Dockerfile) bawaan tanpa batas RAM ketat.
+- **Streamlit Community Cloud (Gratis):**
+  - Pastikan mengarahkan main file ke `app.py` (sudah memakai `torch+cpu` di [`requirements.txt`](requirements.txt) serta pemuatan bobot sekuensial rendah memori di `models/loader.py`). Catatan: node gratis ~1 GB dapat membatasi beban dua transformer sekaligus.
+
+---
+
 ## 🔒 Privasi & Keamanan Data
 
 - **Pemrosesan Lokal Murni**: Seluruh komputasi berjalan di *local host* tanpa mengirimkan gambar atau teks ke layanan API cloud pihak ketiga.

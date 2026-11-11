@@ -2,6 +2,7 @@
 import hashlib
 import os
 from pathlib import Path
+import tempfile
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +18,39 @@ DISPLAY_TOPICS = ('political', 'national origin', 'institutions', 'individual',
 
 class ResearchUnavailable(RuntimeError):
     pass
+
+def _is_dir_writable(path):
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / '.write_probe'
+        probe.write_text('ok', encoding='utf-8')
+        probe.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+def writable_artifacts_root():
+    """Return ROOT if writable, otherwise a persistent/temp user cache folder."""
+    override = os.environ.get('INDOMEME_CACHE_DIR')
+    if override:
+        candidate = Path(override)
+        if _is_dir_writable(candidate):
+            return candidate
+    if _is_dir_writable(ROOT / 'models'):
+        return ROOT
+    home_cache = Path.home() / '.cache' / 'indomeme-xai'
+    if _is_dir_writable(home_cache):
+        return home_cache
+    tmp_cache = Path(tempfile.gettempdir()) / 'indomeme-xai'
+    tmp_cache.mkdir(parents=True, exist_ok=True)
+    return tmp_cache
+
+def resolve_checkpoint_path():
+    """Locate existing verified checkpoint in ROOT first, then writable cache."""
+    if CHECKPOINT.is_file():
+        return CHECKPOINT
+    fallback = writable_artifacts_root() / 'models/checkpoints/best_model.pt'
+    return fallback
 
 def sha256(path):
     digest = hashlib.sha256()

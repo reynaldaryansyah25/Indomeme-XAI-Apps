@@ -2,10 +2,19 @@
 import hashlib
 import json
 from pathlib import Path
-from core.config import ROOT, ResearchUnavailable
+from core.config import ROOT, ResearchUnavailable, writable_artifacts_root
+
+def _find_encoder_folder(name, expected_revision):
+    primary = ROOT / 'models/encoders' / name / expected_revision
+    if (primary / 'source_manifest.json').is_file():
+        return primary
+    fallback = writable_artifacts_root() / 'models/encoders' / name / expected_revision
+    if fallback != primary and (fallback / 'source_manifest.json').is_file():
+        return fallback
+    return primary
 
 def local_encoder(name, spec, expected_revision):
-    folder = ROOT / 'models/encoders' / name / expected_revision
+    folder = _find_encoder_folder(name, expected_revision)
     manifest_path = folder / 'source_manifest.json'
     if not manifest_path.is_file():
         raise ResearchUnavailable(f'Encoder snapshot missing: {name}. Run python scripts/download_encoders.py')
